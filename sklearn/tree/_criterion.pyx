@@ -1706,3 +1706,438 @@ cdef class Poisson(RegressionCriterion):
 
                 poisson_loss += w * xlogy(y[i, k], y[i, k] / y_mean)
         return poisson_loss / (weight_sum * n_outputs)
+
+cdef inline void _move_sums_value(
+    ValueCriterion criterion,
+    float64_t[::1] sum_1,
+    float64_t[::1] sum_2,
+    float64_t* weighted_n_1,
+    float64_t* weighted_n_2,
+    bint put_missing_in_1,
+) noexcept nogil:
+    """Distribute sum_total and sum_missing into sum_1 and sum_2.
+
+    If there are missing values and:
+    - put_missing_in_1 is True, then missing values to go sum_1. Specifically:
+        sum_1 = sum_missing
+        sum_2 = sum_total - sum_missing
+
+    - put_missing_in_1 is False, then missing values go to sum_2. Specifically:
+        sum_1 = 0
+        sum_2 = sum_total
+    """
+    cdef:
+        intp_t i
+        intp_t n_bytes = criterion.n_prices * sizeof(float64_t)
+        bint has_missing = criterion.n_missing != 0
+
+    if has_missing and put_missing_in_1:
+        memcpy(&sum_1[0], &criterion.sum_missing[0], n_bytes)
+        for i in range(criterion.n_prices):
+            sum_2[i] = criterion.sum_total[i] - criterion.sum_missing[i]
+        weighted_n_1[0] = criterion.weighted_n_missing
+        weighted_n_2[0] = criterion.weighted_n_node_samples - criterion.weighted_n_missing
+    else:
+        memset(&sum_1[0], 0, n_bytes)
+        # Assigning sum_2 = sum_total for all outputs.
+        memcpy(&sum_2[0], &criterion.sum_total[0], n_bytes)
+        weighted_n_1[0] = 0.0
+        weighted_n_2[0] = criterion.weighted_n_node_samples
+cdef class ValueCriterion(Criterion):
+    r"""Abstract value criterion.
+
+    This handles cases where the target is a continuous value, and is
+    evaluated by computing the variance of the target values left and right
+    of the split point. The computation takes linear time with `n_samples`
+    by using ::
+
+        negative expected value = -\sum_i^n P_i(fund|price)*value_i(price)
+    """
+
+    def __cinit__(self, intp_t n_prices, intp_t n_samples):
+        """Initialize parameters for this criterion.
+
+        Parameters
+        ----------
+        n_prices : intp_t
+            The number of prices for each sample to evaluate
+
+        n_samples : intp_t
+            The total number of samples to fit on
+        """
+        # Default values
+        self.start = 0
+        self.pos = 0
+        self.end = 0
+
+        self.n_outputs = 1
+        self.n_prices = n_prices
+        self.n_samples = n_samples
+        self.n_node_samples = 0
+        self.weighted_n_node_samples = 0.0 # Will it be weighted by volume?
+        self.weighted_n_left = 0.0 # weighted by deal volume
+        self.weighted_n_right = 0.0 # weighted by deal volume
+        self.weighted_n_missing = 0.0 # weighted by deal volume
+
+        self.sq_sum_total = 0.0 # do I need this?
+
+        self.sum_total = np.zeros(n_prices, dtype=np.float64)
+        self.sum_left = np.zeros(n_prices, dtype=np.float64)
+        self.sum_right = np.zeros(n_prices, dtype=np.float64)
+
+    def __reduce__(self):
+        return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
+
+    cdef int init(
+        self,
+        const float64_t[:, ::1] y,
+        const float64_t[:] sample_weight,
+        const float64_t[:, ::1] deal_value,
+        const float64_t[:] deal_volume,
+        const float64_t[:, ::1] expected_value,
+        const float64_t[:] prices,
+        float64_t weighted_n_samples,
+        const intp_t[:] sample_indices,
+        intp_t start,
+        intp_t end,
+    ) except -1 nogil:
+        """Initialize the criterion.
+
+        This initializes the criterion at node sample_indices[start:end] and children
+        sample_indices[start:start] and sample_indices[start:end].
+        """
+        # Initialize fields
+        self.y = y # the probabilities alone, not the expected_value
+        self.sample_weight = sample_weight
+        self.deal_value = deal_value
+        self.deal_volume = deal_volume
+        self.expected_value = expected_value
+        self.prices = prices
+        self.sample_indices = sample_indices
+        self.start = start
+        self.end = end
+        self.n_node_samples = end - start
+        self.weighted_n_samples = weighted_n_samples
+        self.weighted_n_node_samples = 0.0 #In this case it is the sum of the deal volumes at root
+
+        cdef intp_t i
+        cdef intp_t p
+        cdef intp_t k
+        cdef intp_t price_index = 0
+        cdef float64_t ev_ik
+        cdef float64_t w_ev_ik
+        cdef float64_t w = 1.0
+        cdef float64_t candidate_total = 0.0
+        cdef float64_t best_total = INFINITY
+        self.sq_sum_total = 0.0
+        memset(&self.sum_total[0], 0, self.n_prices * sizeof(float64_t))
+        #self.sum_total = 0
+
+        #count them first
+        for p in range(start, end):
+            self.weighted_n_node_samples += self.deal_volume[i]
+        
+        
+        for k in range(self.n_prices):
+            for p in range(start, end):
+                i = sample_indices[p]
+                ev_ik = self.expected_value[i, k] # the expected values P(fund)*value
+                self.sum_total[k] += ev_ik
+            
+            if candidate_total < best_total:
+                price_index = k
+                best_total = candidate_total
+        
+        #self.sum_total = best_total
+        self.root_price_index = price_index
+
+        # Reset to pos=start
+        self.reset()
+        return 0
+
+    cdef void init_sum_missing(self):
+        """Init sum_missing to hold sums for missing values."""
+        self.sum_missing = np.zeros(self.n_prices, dtype=np.float64)
+
+    cdef void init_missing(self, intp_t n_missing) noexcept nogil:
+        """Initialize sum_missing if there are missing values.
+
+        This method assumes that caller placed the missing samples in
+        self.sample_indices[-n_missing:]
+        """
+        cdef intp_t i, p, k
+        cdef float64_t ev_ik
+        cdef float64_t w_ev_ik
+        cdef float64_t w = 1.0
+
+        self.n_missing = n_missing
+        if n_missing == 0:
+            return
+
+        memset(&self.sum_missing[0], 0, self.n_prices * sizeof(float64_t))
+
+        self.weighted_n_missing = 0.0
+
+        for p in range(self.end - n_missing, self.end):
+            i = self.sample_indices[p]
+            self.weighted_n_missing += self.deal_volume[i]
+
+
+        # The missing samples are assumed to be in self.sample_indices[-n_missing:]
+        for p in range(self.end - n_missing, self.end):
+            for k in range(self.n_prices):
+                i = self.sample_indices[p]
+
+                ev_ik = self.expected_value[i, k]
+                self.sum_missing[k] += ev_ik
+
+    cdef int reset(self) except -1 nogil:
+        """Reset the criterion at pos=start."""
+        self.pos = self.start
+        _move_sums_value(
+            self,
+            self.sum_left,
+            self.sum_right,
+            &self.weighted_n_left,
+            &self.weighted_n_right,
+            self.missing_go_to_left
+        )
+        return 0
+
+    cdef int reverse_reset(self) except -1 nogil:
+        """Reset the criterion at pos=end."""
+        self.pos = self.end
+        _move_sums_value(
+            self,
+            self.sum_right,
+            self.sum_left,
+            &self.weighted_n_right,
+            &self.weighted_n_left,
+            not self.missing_go_to_left
+        )
+        return 0
+
+    cdef int update(self, intp_t new_pos) except -1 nogil:
+        """Updated statistics by moving sample_indices[pos:new_pos] to the left."""
+
+        #need to calculate the price in the left and right nodes as well
+        cdef const float64_t[:] sample_weight = self.sample_weight
+        cdef const intp_t[:] sample_indices = self.sample_indices
+        cdef const float64_t[:] deal_volume = self.deal_volume
+
+        cdef intp_t pos = self.pos
+
+        # The missing samples are assumed to be in
+        # self.sample_indices[-self.n_missing:] that is
+        # self.sample_indices[end_non_missing:self.end].
+        cdef intp_t end_non_missing = self.end - self.n_missing
+        cdef intp_t i
+        cdef intp_t p
+        cdef intp_t k
+        cdef float64_t w = 1.0
+        cdef float64_t left_best_ev = INFINITY
+        cdef float64_t right_best_ev = INFINITY
+        cdef intp_t left_index = 0
+        cdef intp_t right_index = 0
+
+        # Update statistics up to new_pos
+        #
+        # Given that
+        #           sum_left[x] +  sum_right[x] = sum_total[x]
+        # and that sum_total is known, we are going to update
+        # sum_left from the direction that require the least amount
+        # of computations, i.e. from pos to new_pos or from end to new_pos.
+        if (new_pos - pos) <= (end_non_missing - new_pos):
+            
+            for p in range(pos, new_pos):
+                i = sample_indices[p]
+
+                for k in range(self.n_prices):
+                    self.sum_left[k] += self.expected_value[i, k]
+
+                self.weighted_n_left += self.deal_volume[i]
+
+        else:
+            self.reverse_reset()
+
+            for p in range(end_non_missing - 1, new_pos - 1, -1):
+                i = sample_indices[p]
+
+                for k in range(self.n_prices):
+                    self.sum_left[k] -= self.expected_value[i, k]
+
+                self.weighted_n_left -= self.deal_volume[i]
+
+        self.weighted_n_right = (self.weighted_n_node_samples -
+                                 self.weighted_n_left)
+        for k in range(self.n_prices):
+            self.sum_right[k] = self.sum_total[k] - self.sum_left[k]
+
+        
+        for ind in range(self.n_prices):
+            if self.sum_left[ind] < left_best_ev:
+                left_best_ev = self.sum_left[ind]
+                left_index = ind
+            if self.sum_right[ind] < right_best_ev:
+                right_best_ev = self.sum_right[ind]
+                right_index = ind
+
+        self.left_price_index = left_index
+        self.right_price_index = right_index
+
+        self.pos = new_pos
+        return 0
+
+    cdef float64_t node_impurity(self) noexcept nogil:
+        pass
+
+    cdef void children_impurity(self, float64_t* impurity_left,
+                                float64_t* impurity_right) noexcept nogil:
+        pass
+
+    cdef void node_value(self, float64_t* dest) noexcept nogil:
+        """Compute the node value of sample_indices[start:end] into dest."""
+
+        dest[0] = self.prices[self.root_price_index]
+
+    cdef inline void clip_node_value(self, float64_t* dest, float64_t lower_bound, float64_t upper_bound) noexcept nogil:
+        """Clip the value in dest between lower_bound and upper_bound for monotonic constraints."""
+        if dest[0] < lower_bound:
+            dest[0] = lower_bound
+        elif dest[0] > upper_bound:
+            dest[0] = upper_bound
+
+    cdef float64_t middle_value(self) noexcept nogil:
+        """Compute the middle value of a split for monotonicity constraints as the simple average
+        of the left and right children values.
+
+        Monotonicity constraints are only supported for single-output trees we can safely assume
+        n_outputs == 1.
+        """
+        return (
+            (self.prices[self.left_price_index] / 2) +
+            (self.prices[self.right_price_index] / 2)
+        )
+
+    cdef bint check_monotonicity(
+        self,
+        cnp.int8_t monotonic_cst,
+        float64_t lower_bound,
+        float64_t upper_bound,
+    ) noexcept nogil:
+        """Check monotonicity constraint is satisfied at the current regression split"""
+        cdef:
+            float64_t value_left = self.prices[self.left_price_index]
+            float64_t value_right = self.prices[self.right_price_index]
+
+        return self._check_monotonicity(monotonic_cst, lower_bound, upper_bound, value_left, value_right)
+
+
+cdef class NegativeExpectedValueCriterion(Criterion):
+    """Negative expected value impurity criterion.
+
+        Negative expected value = neg expected val left + neg expected val right
+    """
+
+    cdef float64_t node_impurity(self) noexcept nogil:
+        """Evaluate the impurity of the current node.
+
+        Evaluate the Negative Expected VAlue criterion as impurity of the current node,
+        i.e. the impurity of sample_indices[start:end]. The smaller the impurity the
+        better.
+        """
+
+        return self.sum_total[self.root_price_index]
+
+    cdef float64_t proxy_impurity_improvement(self) noexcept nogil:
+        """Compute a proxy of the impurity reduction.
+
+        This method is used to speed up the search for the best split.
+        It is a proxy quantity such that the split that maximizes this value
+        also maximizes the impurity improvement. It neglects all constant terms
+        of the impurity decrease for a given split.
+
+        The absolute impurity improvement is only computed by the
+        impurity_improvement method once the best split has been found.
+
+        The Negative Expected Value proxy is derived from
+
+            sum_{i left}P(fund|interest)*value(interest) + sum_{i right}P(fund|interest)*value(interest)
+        """
+
+        return self.sum_left[self.left_price_index] + self.sum_right[self.right_price_index]
+
+    cdef void children_impurity(self, float64_t* impurity_left,
+                                float64_t* impurity_right) noexcept nogil:
+        """Evaluate the impurity in children nodes.
+
+        i.e. the impurity of the left child (sample_indices[start:pos]) and the
+        impurity the right child (sample_indices[pos:end]).
+        """
+
+        impurity_left[0] = self.sum_left[self.left_price_index]
+        impurity_right[0] = self.sum_right[self.right_price_index]
+    
+    cdef bint check_volume_won(
+        self,
+        float64_t parent_volume_won
+    ) noexcept nogil:
+        """Check volume constraint is satisfied at the current regression split"""
+        cdef:
+            float64_t volume_won_left = 0
+            float64_t volume_won_right = 0
+
+        self.volume_won_left_and_right(&volume_won_left, &volume_won_right)
+        return volume_won_left + volume_won_right >= parent_volume_won
+
+    cdef void volume_won_left_and_right(self, float64_t* volume_won_left,
+                                float64_t* volume_won_right) noexcept nogil:
+
+        cdef const float64_t[:] deal_volume = self.deal_volume
+        cdef const intp_t[:] sample_indices = self.sample_indices
+        cdef intp_t pos = self.pos
+        cdef intp_t start = self.start
+
+        cdef float64_t y_ik
+
+        cdef float64_t won_volume_left = 0.0
+        cdef float64_t won_volume_right = 0.0
+
+        cdef intp_t i
+        cdef intp_t p
+        cdef intp_t k
+
+        cdef intp_t end_non_missing
+        end_non_missing = self.end - self.n_missing
+
+        for p in range(start, pos):
+            i = sample_indices[p]
+
+            y_ik = self.y[i, self.left_price_index] # the probabilty for the best price
+            won_volume_left += y_ik * deal_volume[i]
+
+        for p in range(pos, end_non_missing):
+            i = sample_indices[p]
+
+            y_ik = self.y[i, self.right_price_index] # the probabilty for the best price
+            won_volume_right += y_ik * deal_volume[i]
+
+        if self.missing_go_to_left:
+            # add up the impact of these missing values on the left child
+            # statistics.
+            # Note: this only impacts the square sum as the sum
+            # is modified elsewhere.
+            end_non_missing = self.end - self.n_missing
+
+            for p in range(end_non_missing, self.end):
+                i = sample_indices[p]
+                y_ik = self.y[i, self.left_price_index] # the probabilty for the best price
+                won_volume_left += y_ik * deal_volume[i]
+        else:
+            for p in range(end_non_missing, self.end):
+                i = sample_indices[p]
+                y_ik = self.y[i, self.right_price_index] # the probabilty for the best price
+                won_volume_right += y_ik * deal_volume[i]
+
+        volume_won_left[0] = won_volume_left
+        volume_won_right[0] = won_volume_right

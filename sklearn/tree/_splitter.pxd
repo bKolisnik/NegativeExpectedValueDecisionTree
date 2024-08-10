@@ -108,3 +108,15 @@ cdef class Splitter:
     cdef void clip_node_value(self, float64_t* dest, float64_t lower_bound, float64_t upper_bound) noexcept nogil
 
     cdef float64_t node_impurity(self) noexcept nogil
+
+cdef class ValueSplitter(Splitter):
+    cdef const float64_t[:, ::1] deal_value     # Deal values across samples
+    cdef float64_t[::1] deal_volume             # Deal volumes across samples
+    cdef const float64_t[:, ::1] expected_value # Deal values across samples
+    cdef const float64_t[:] prices              # Prices for each price idx
+    cdef int node_reset(
+        self,
+        intp_t start,
+        intp_t end,
+        float64_t* weighted_n_node_samples
+    ) except -1 nogil

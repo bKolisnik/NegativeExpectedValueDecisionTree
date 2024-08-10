@@ -45,6 +45,7 @@ from . import _criterion, _splitter, _tree
 from ._criterion import Criterion
 from ._splitter import Splitter
 from ._tree import (
+    DepthFirstValueTreeBuilder,
     BestFirstTreeBuilder,
     DepthFirstTreeBuilder,
     Tree,
@@ -78,6 +79,13 @@ CRITERIA_REG = {
     "friedman_mse": _criterion.FriedmanMSE,
     "absolute_error": _criterion.MAE,
     "poisson": _criterion.Poisson,
+}
+CRITERIA_VALUE = {
+    "negative_expected_value": _criterion.NegativeExpectedValue
+}
+
+VALUE_SPLITTERS = {
+    "best": _splitter.ValueSplitter # Assumed to be dense.
 }
 
 DENSE_SPLITTERS = {"best": _splitter.BestSplitter, "random": _splitter.RandomSplitter}
@@ -1420,6 +1428,543 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
         }
         return {"allow_nan": allow_nan}
 
+class ExpectedValueDecisionTreeRegressor(RegressorMixin, DecisionTreeRegressor):
+    """A decision tree regressor.
+
+    Read more in the :ref:`User Guide <tree>`.
+
+    Parameters
+    ----------
+    criterion : {"negative_expected_value"}, default="negative_expected_value"
+        The function to measure the quality of a split. Supported criteria
+        are "negative_expected_value" for the negative of the expected value, which is equal to
+        the probability to fund times the value of the deal
+        using the optimized interest of each terminal node.
+
+    splitter : {"best", "random"}, default="best"
+        The strategy used to choose the split at each node. Supported
+        strategies are "best" to choose the best split and "random" to choose
+        the best random split.
+
+    max_depth : int, default=None
+        The maximum depth of the tree. If None, then nodes are expanded until
+        all leaves are pure or until all leaves contain less than
+        min_samples_split samples.
+
+    min_samples_split : int or float, default=2
+        The minimum number of samples required to split an internal node:
+
+        - If int, then consider `min_samples_split` as the minimum number.
+        - If float, then `min_samples_split` is a fraction and
+          `ceil(min_samples_split * n_samples)` are the minimum
+          number of samples for each split.
+
+        .. versionchanged:: 0.18
+           Added float values for fractions.
+
+    min_samples_leaf : int or float, default=1
+        The minimum number of samples required to be at a leaf node.
+        A split point at any depth will only be considered if it leaves at
+        least ``min_samples_leaf`` training samples in each of the left and
+        right branches.  This may have the effect of smoothing the model,
+        especially in regression.
+
+        - If int, then consider `min_samples_leaf` as the minimum number.
+        - If float, then `min_samples_leaf` is a fraction and
+          `ceil(min_samples_leaf * n_samples)` are the minimum
+          number of samples for each node.
+
+        .. versionchanged:: 0.18
+           Added float values for fractions.
+
+    min_weight_fraction_leaf : float, default=0.0
+        The minimum weighted fraction of the sum total of weights (of all
+        the input samples) required to be at a leaf node. Samples have
+        equal weight when sample_weight is not provided.
+
+    max_features : int, float or {"sqrt", "log2"}, default=None
+        The number of features to consider when looking for the best split:
+
+        - If int, then consider `max_features` features at each split.
+        - If float, then `max_features` is a fraction and
+          `max(1, int(max_features * n_features_in_))` features are considered at each
+          split.
+        - If "sqrt", then `max_features=sqrt(n_features)`.
+        - If "log2", then `max_features=log2(n_features)`.
+        - If None, then `max_features=n_features`.
+
+        Note: the search for a split does not stop until at least one
+        valid partition of the node samples is found, even if it requires to
+        effectively inspect more than ``max_features`` features.
+
+    random_state : int, RandomState instance or None, default=None
+        Controls the randomness of the estimator. The features are always
+        randomly permuted at each split, even if ``splitter`` is set to
+        ``"best"``. When ``max_features < n_features``, the algorithm will
+        select ``max_features`` at random at each split before finding the best
+        split among them. But the best found split may vary across different
+        runs, even if ``max_features=n_features``. That is the case, if the
+        improvement of the criterion is identical for several splits and one
+        split has to be selected at random. To obtain a deterministic behaviour
+        during fitting, ``random_state`` has to be fixed to an integer.
+        See :term:`Glossary <random_state>` for details.
+
+    max_leaf_nodes : int, default=None
+        Grow a tree with ``max_leaf_nodes`` in best-first fashion.
+        Best nodes are defined as relative reduction in impurity.
+        If None then unlimited number of leaf nodes.
+
+    min_impurity_decrease : float, default=0.0
+        A node will be split if this split induces a decrease of the impurity
+        greater than or equal to this value.
+
+        The weighted impurity decrease equation is the following::
+
+            N_t / N * (impurity - N_t_R / N_t * right_impurity
+                                - N_t_L / N_t * left_impurity)
+
+        where ``N`` is the total number of samples, ``N_t`` is the number of
+        samples at the current node, ``N_t_L`` is the number of samples in the
+        left child, and ``N_t_R`` is the number of samples in the right child.
+
+        ``N``, ``N_t``, ``N_t_R`` and ``N_t_L`` all refer to the weighted sum,
+        if ``sample_weight`` is passed.
+
+        .. versionadded:: 0.19
+
+    ccp_alpha : non-negative float, default=0.0
+        Complexity parameter used for Minimal Cost-Complexity Pruning. The
+        subtree with the largest cost complexity that is smaller than
+        ``ccp_alpha`` will be chosen. By default, no pruning is performed. See
+        :ref:`minimal_cost_complexity_pruning` for details.
+
+        .. versionadded:: 0.22
+
+    monotonic_cst : array-like of int of shape (n_features), default=None
+        Indicates the monotonicity constraint to enforce on each feature.
+          - 1: monotonic increase
+          - 0: no constraint
+          - -1: monotonic decrease
+
+        If monotonic_cst is None, no constraints are applied.
+
+        Monotonicity constraints are not supported for:
+          - multioutput regressions (i.e. when `n_outputs_ > 1`),
+          - regressions trained on data with missing values.
+
+        Read more in the :ref:`User Guide <monotonic_cst_gbdt>`.
+
+        .. versionadded:: 1.4
+
+    Attributes
+    ----------
+    feature_importances_ : ndarray of shape (n_features,)
+        The feature importances.
+        The higher, the more important the feature.
+        The importance of a feature is computed as the
+        (normalized) total reduction of the criterion brought
+        by that feature. It is also known as the Gini importance [4]_.
+
+        Warning: impurity-based feature importances can be misleading for
+        high cardinality features (many unique values). See
+        :func:`sklearn.inspection.permutation_importance` as an alternative.
+
+    max_features_ : int
+        The inferred value of max_features.
+
+    n_features_in_ : int
+        Number of features seen during :term:`fit`.
+
+        .. versionadded:: 0.24
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during :term:`fit`. Defined only when `X`
+        has feature names that are all strings.
+
+        .. versionadded:: 1.0
+
+    n_outputs_ : int
+        The number of outputs when ``fit`` is performed.
+
+    tree_ : Tree instance
+        The underlying Tree object. Please refer to
+        ``help(sklearn.tree._tree.Tree)`` for attributes of Tree object and
+        :ref:`sphx_glr_auto_examples_tree_plot_unveil_tree_structure.py`
+        for basic usage of these attributes.
+
+    See Also
+    --------
+    DecisionTreeClassifier : A decision tree classifier.
+
+    Notes
+    -----
+    The default values for the parameters controlling the size of the trees
+    (e.g. ``max_depth``, ``min_samples_leaf``, etc.) lead to fully grown and
+    unpruned trees which can potentially be very large on some data sets. To
+    reduce memory consumption, the complexity and size of the trees should be
+    controlled by setting those parameter values.
+
+    References
+    ----------
+
+    .. [1] https://en.wikipedia.org/wiki/Decision_tree_learning
+
+    .. [2] L. Breiman, J. Friedman, R. Olshen, and C. Stone, "Classification
+           and Regression Trees", Wadsworth, Belmont, CA, 1984.
+
+    .. [3] T. Hastie, R. Tibshirani and J. Friedman. "Elements of Statistical
+           Learning", Springer, 2009.
+
+    .. [4] L. Breiman, and A. Cutler, "Random Forests",
+           https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm
+
+    Examples
+    --------
+    >>> from sklearn.datasets import load_diabetes
+    >>> from sklearn.model_selection import cross_val_score
+    >>> from sklearn.tree import ExpectedValueDecisionTreeRegressor
+    >>> X, y = load_diabetes(return_X_y=True)
+    >>> regressor = DecisionTreeRegressor(random_state=0)
+    >>> cross_val_score(regressor, X, y, cv=10)
+    ...                    # doctest: +SKIP
+    ...
+    array([-0.39..., -0.46...,  0.02...,  0.06..., -0.50...,
+           0.16...,  0.11..., -0.73..., -0.30..., -0.00...])
+    """
+
+    _parameter_constraints: dict = {
+        **BaseDecisionTree._parameter_constraints,
+        "criterion": [
+            StrOptions({"negative_expected_value"}),
+            Hidden(Criterion),
+        ],"volume_constraint": [
+            Interval(RealNotInt, 0.0, 1.0, closed="neither"),
+            None
+        ],
+    }
+
+    def __init__(
+        self,
+        *,
+        criterion="negative_expected_value",
+        splitter="best",
+        max_depth=None,
+        min_samples_split=2,
+        min_samples_leaf=1,
+        min_weight_fraction_leaf=0.0,
+        max_features=None,
+        random_state=None,
+        max_leaf_nodes=None,
+        min_impurity_decrease=0.0,
+        ccp_alpha=0.0,
+        monotonic_cst=None,
+        volume_cst=None
+    ):
+        super().__init__(
+            criterion=criterion,
+            splitter=splitter,
+            max_depth=max_depth,
+            min_samples_split=min_samples_split,
+            min_samples_leaf=min_samples_leaf,
+            min_weight_fraction_leaf=min_weight_fraction_leaf,
+            max_features=max_features,
+            max_leaf_nodes=max_leaf_nodes,
+            random_state=random_state,
+            min_impurity_decrease=min_impurity_decrease,
+            ccp_alpha=ccp_alpha,
+            monotonic_cst=monotonic_cst,
+        )
+
+        self.volume_cst = volume_cst
+
+
+    @_fit_context(prefer_skip_nested_validation=True)
+    def fit(self, X, y, deal_value, deal_volume, prices, check_input=True):
+        """Build a decision tree regressor from the training set (X, y).
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            The training input samples. Internally, it will be converted to
+            ``dtype=np.float32`` and if a sparse matrix is provided
+            to a sparse ``csc_matrix``.
+
+        y : array-like of shape (n_samples, n_prices)
+            The target values (real numbers). Use ``dtype=np.float64`` and
+            ``order='C'`` for maximum efficiency.
+            The probability of winning each deal for each of n_prices.
+
+        deal_value : array-like of shape (n_samples, n_prices)
+            Use ``dtype=np.float64`` and
+            ``order='C'`` for maximum efficiency.
+            The value of each deal across n_prices as computed by the
+            valuations calculator.
+
+        deal_volume : array-like of shape (n_samples,). default=None
+            If None, volume constraint cannot be applied. Splits
+            that would violate the volume constraint are not applied.
+
+        prices: array-like of shape (n_prices)
+            Use ``dtype=np.float64`` and
+            ``order='C'`` for maximum efficiency.
+            The prices across which the deal values are calculated.
+
+        check_input : bool, default=True
+            Allow to bypass several input checking.
+            Don't use this parameter unless you know what you're doing.
+
+        Returns
+        -------
+        self : DecisionTreeRegressor
+            Fitted estimator.
+        """
+
+        random_state = check_random_state(self.random_state)
+
+        if check_input:
+            # Need to validate separately here.
+            # We can't pass multi_output=True because that would allow y to be
+            # csr.
+
+            # _compute_missing_values_in_feature_mask will check for finite values and
+            # compute the missing mask if the tree supports missing values
+            check_X_params = dict(
+                dtype=DTYPE, accept_sparse="csc", force_all_finite=False
+            )
+            check_y_params = dict(ensure_2d=True, dtype=None)
+            X, y = self._validate_data(
+                X, y, validate_separately=(check_X_params, check_y_params)
+            )
+
+            missing_values_in_feature_mask = (
+                self._compute_missing_values_in_feature_mask(X)
+            )
+            if issparse(X):
+                X.sort_indices()
+
+                if X.indices.dtype != np.intc or X.indptr.dtype != np.intc:
+                    raise ValueError(
+                        "No support for np.int64 index based sparse matrices"
+                    )
+
+            if self.criterion == "negative_expected_value":
+                if np.any(y < 0):
+                    raise ValueError(
+                        "Some value(s) of y are negative which is"
+                        " not allowed for expected value calculation"
+                    )
+                if np.any(y > 1):
+                    raise ValueError(
+                        "Some value(s) of y are greater than 1 which is"
+                        " not allowed for expected value calculation"
+                    )
+                
+
+                if np.any(deal_volume <= 0):
+                    raise ValueError(
+                        "Some value(s) of deal_volume are less than or equal to 0 which is"
+                        " not allowed for expected value calculation"
+                    )
+
+        # Determine output settings
+        n_samples, self.n_features_in_ = X.shape
+        is_classification = False
+
+        y = np.atleast_2d(y)
+
+        if y.ndim == 1:
+            # reshape is necessary to preserve the data contiguity against vs
+            # [:, np.newaxis] that does not.
+            y = np.reshape(y, (-1, 1))
+
+        self.n_outputs_ = 1
+        self.n_prices = y.shape[1] # n_prices in this case
+
+        if getattr(y, "dtype", None) != DOUBLE or not y.flags.contiguous:
+            y = np.ascontiguousarray(y, dtype=DOUBLE)
+
+        max_depth = np.iinfo(np.int32).max if self.max_depth is None else self.max_depth
+
+        if isinstance(self.min_samples_leaf, numbers.Integral):
+            min_samples_leaf = self.min_samples_leaf
+        else:  # float
+            min_samples_leaf = int(ceil(self.min_samples_leaf * n_samples))
+
+        if isinstance(self.min_samples_split, numbers.Integral):
+            min_samples_split = self.min_samples_split
+        else:  # float
+            min_samples_split = int(ceil(self.min_samples_split * n_samples))
+            min_samples_split = max(2, min_samples_split)
+
+        min_samples_split = max(min_samples_split, 2 * min_samples_leaf)
+
+        if isinstance(self.max_features, str):
+            if self.max_features == "sqrt":
+                max_features = max(1, int(np.sqrt(self.n_features_in_)))
+            elif self.max_features == "log2":
+                max_features = max(1, int(np.log2(self.n_features_in_)))
+        elif self.max_features is None:
+            max_features = self.n_features_in_
+        elif isinstance(self.max_features, numbers.Integral):
+            max_features = self.max_features
+        else:  # float
+            if self.max_features > 0.0:
+                max_features = max(1, int(self.max_features * self.n_features_in_))
+            else:
+                max_features = 0
+
+        self.max_features_ = max_features
+
+        max_leaf_nodes = -1 if self.max_leaf_nodes is None else self.max_leaf_nodes
+
+        if len(y) != n_samples:
+            raise ValueError(
+                "Number of labels=%d does not match number of samples=%d"
+                % (len(y), n_samples)
+            )
+
+        if len(deal_value.shape) != 2:
+            raise ValueError(
+                "deal_value must be 2d array-like"
+            )
+        
+        if len(deal_value) != n_samples:
+            raise ValueError(
+                "Number of deal values=%d does not match number of samples=%d"
+                % (len(deal_value), n_samples)
+            )
+        
+        if len(deal_value[0]) != len(y[0]):
+            raise ValueError(
+                "Number of prices for deal values=%d and "
+                "number of prices for probabilities of renewal=%d"
+                "are not consistent."
+                % (len(deal_value[0]), len(y[0]))
+            )
+        
+        if len(prices) != n_samples:
+            raise ValueError(
+                "Number of prices=%d does not match number of samples=%d"
+                % (len(prices), n_samples)
+            )
+
+        #deal_value = _check_sample_weight(deal_value, X, DOUBLE)
+        deal_volume = _check_sample_weight(deal_volume, X, DOUBLE)
+
+        # Set min_weight_leaf from min_weight_fraction_leaf
+        min_weight_leaf = self.min_weight_fraction_leaf * np.sum(deal_volume)
+
+        # Build tree
+        criterion = self.criterion
+        if not isinstance(criterion, Criterion):
+            # below line is calling the cinit
+            criterion = CRITERIA_VALUE[self.criterion](self.n_prices, n_samples)
+        else:
+            # Make a deepcopy in case the criterion has mutable attributes that
+            # might be shared and modified concurrently during parallel fitting
+            criterion = copy.deepcopy(criterion)
+
+        if issparse(X):
+            raise ValueError(
+                "X cannot be sparse for ExpectedValueDecisionTreeRegressor at this time."
+            )
+
+        SPLITTERS = VALUE_SPLITTERS
+
+        splitter = self.splitter
+        if self.monotonic_cst is None:
+            monotonic_cst = None
+        else:
+            if self.n_outputs_ > 1:
+                raise ValueError(
+                    "Monotonicity constraints are not supported with multiple outputs."
+                )
+            # Check to correct monotonicity constraint' specification,
+            # by applying element-wise logical conjunction
+            # Note: we do not cast `np.asarray(self.monotonic_cst, dtype=np.int8)`
+            # straight away here so as to generate error messages for invalid
+            # values using the original values prior to any dtype related conversion.
+            monotonic_cst = np.asarray(self.monotonic_cst)
+            if monotonic_cst.shape[0] != X.shape[1]:
+                raise ValueError(
+                    "monotonic_cst has shape {} but the input data "
+                    "X has {} features.".format(monotonic_cst.shape[0], X.shape[1])
+                )
+            valid_constraints = np.isin(monotonic_cst, (-1, 0, 1))
+            if not np.all(valid_constraints):
+                unique_constaints_value = np.unique(monotonic_cst)
+                raise ValueError(
+                    "monotonic_cst must be None or an array-like of -1, 0 or 1, but"
+                    f" got {unique_constaints_value}"
+                )
+            monotonic_cst = np.asarray(monotonic_cst, dtype=np.int8)
+            if is_classifier(self):
+                if self.n_classes_[0] > 2:
+                    raise ValueError(
+                        "Monotonicity constraints are not supported with multiclass "
+                        "classification"
+                    )
+                # Binary classification trees are built by constraining probabilities
+                # of the *negative class* in order to make the implementation similar
+                # to regression trees.
+                # Since self.monotonic_cst encodes constraints on probabilities of the
+                # *positive class*, all signs must be flipped.
+                monotonic_cst *= -1
+
+        if self.volume_cst is None:
+            volume_cst = None
+        else:
+            volume_cst = self.volume_cst * np.sum(deal_volume)
+
+
+        if not isinstance(self.splitter, Splitter):
+            splitter = SPLITTERS[self.splitter](
+                criterion,
+                self.max_features_,
+                min_samples_leaf,
+                min_weight_leaf,
+                random_state,
+                monotonic_cst,
+            )
+
+
+        self.tree_ = Tree(
+            self.n_features_in_,
+            # TODO: tree shouldn't need this in this case
+            np.array([1] * self.n_outputs_, dtype=np.intp),
+            self.n_outputs_,
+        )
+
+        # Use BestFirst if max_leaf_nodes given; use DepthFirst otherwise
+        if max_leaf_nodes < 0:
+            builder = DepthFirstValueTreeBuilder(
+                splitter,
+                min_samples_split,
+                min_samples_leaf,
+                min_weight_leaf,
+                max_depth,
+                self.min_impurity_decrease,
+            )
+        else:
+            builder = BestFirstTreeBuilder(
+                splitter,
+                min_samples_split,
+                min_samples_leaf,
+                min_weight_leaf,
+                max_depth,
+                max_leaf_nodes,
+                self.min_impurity_decrease,
+            )
+
+        builder.build(self.tree_, X, y, deal_value, deal_volume, prices, None, missing_values_in_feature_mask, volume_cst)
+
+        if self.n_outputs_ == 1 and is_classifier(self):
+            self.n_classes_ = self.n_classes_[0]
+            self.classes_ = self.classes_[0]
+
+        self._prune_tree()
+
+        return self
 
 class ExtraTreeClassifier(DecisionTreeClassifier):
     """An extremely randomized tree classifier.

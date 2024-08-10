@@ -15,7 +15,7 @@ cimport numpy as cnp
 
 from ..utils._typedefs cimport float32_t, float64_t, intp_t, int32_t, uint32_t
 
-from ._splitter cimport Splitter
+from ._splitter cimport Splitter, ValueSplitter
 from ._splitter cimport SplitRecord
 
 cdef struct Node:
@@ -39,6 +39,7 @@ cdef struct ParentInfo:
     float64_t upper_bound           # the upper bound of the parent's impurity
     float64_t impurity              # the impurity of the parent
     intp_t n_constant_features      # the number of constant features found in parent
+    float64_t parent_vol_cst        # the parent's volume done
 
 cdef class Tree:
     # The Tree object is a binary tree structure constructed by the

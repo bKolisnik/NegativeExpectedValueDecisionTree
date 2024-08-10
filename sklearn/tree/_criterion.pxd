@@ -113,3 +113,32 @@ cdef class RegressionCriterion(Criterion):
     cdef float64_t[::1] sum_left     # Same as above, but for the left side of the split
     cdef float64_t[::1] sum_right    # Same as above, but for the right side of the split
     cdef float64_t[::1] sum_missing  # Same as above, but for missing values in X
+
+cdef class ValueCriterion(Criterion):
+    """Abstract Negative Expected Value criterion."""
+
+    cdef float64_t sq_sum_total
+
+    cdef float64_t[::1] sum_total         # The sum of w*y.
+    cdef intp_t root_price_index     # The price index for the root node.
+    cdef float64_t[::1] sum_left     # Same as above, but for the left side of the split
+    cdef float64_t[::1] sum_right    # Same as above, but for the right side of the split
+    cdef float64_t[::1] sum_missing  # Same as above, but for missing values in X
+    cdef intp_t left_price_index     # The price index for the root node.
+    cdef intp_t right_price_index     # The price index for the root node.
+
+    # Methods
+    cdef int init(
+        self,
+        const float64_t[:, ::1] y,
+        const float64_t[:] sample_weight,
+        const float64_t[:, ::1] deal_value,
+        const float64_t[:] deal_volume,
+        const float64_t[:, ::1] expected_value,
+        const float64_t[:] prices,
+        float64_t weighted_n_samples,
+        const intp_t[:] sample_indices,
+        intp_t start,
+        intp_t end,
+
+    ) except -1 nogil

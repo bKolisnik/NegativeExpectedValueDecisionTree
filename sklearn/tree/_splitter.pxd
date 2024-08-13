@@ -64,6 +64,7 @@ cdef class Splitter:
     cdef const int8_t[:] monotonic_cst
     cdef bint with_monotonic_cst
     cdef const float64_t[:] sample_weight
+    cdef bint with_volume_cst
 
     # The samples vector `samples` is maintained by the Splitter object such
     # that the samples contained in a node are contiguous. With this setting,
@@ -111,9 +112,20 @@ cdef class Splitter:
 
 cdef class ValueSplitter(Splitter):
     cdef const float64_t[:, ::1] deal_value     # Deal values across samples
-    cdef float64_t[::1] deal_volume             # Deal volumes across samples
-    cdef const float64_t[:, ::1] expected_value # Deal values across samples
+    cdef const float64_t[:] deal_volume         # Deal volumes across samples
+    cdef float64_t[:, ::1] expected_value       # Deal values across samples
     cdef const float64_t[:] prices              # Prices for each price idx
+    # Methods
+    cdef int value_init(
+        self,
+        object X,
+        const float64_t[:, ::1] y,
+        const float64_t[:] sample_weight,
+        const unsigned char[::1] missing_values_in_feature_mask,
+        const float64_t[:, ::1] deal_value,
+        const float64_t[:] deal_volume,
+        const float64_t[:] prices
+    ) except -1
     cdef int node_reset(
         self,
         intp_t start,

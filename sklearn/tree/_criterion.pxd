@@ -47,6 +47,19 @@ cdef class Criterion:
         float64_t weighted_n_samples,
         const intp_t[:] sample_indices,
         intp_t start,
+        intp_t end,
+    ) except -1 nogil
+    cdef int value_init(
+        self,
+        const float64_t[:, ::1] y,
+        const float64_t[:] sample_weight,
+        const float64_t[:, ::1] deal_value,
+        const float64_t[:] deal_volume,
+        const float64_t[:, ::1] expected_value,
+        const float64_t[:] prices,
+        float64_t weighted_n_samples,
+        const intp_t[:] sample_indices,
+        intp_t start,
         intp_t end
     ) except -1 nogil
     cdef void init_sum_missing(self)
@@ -92,6 +105,12 @@ cdef class Criterion:
             float64_t sum_left,
             float64_t sum_right,
     ) noexcept nogil
+    cdef bint check_volume_won(
+        self,
+        float64_t parent_volume_won
+    ) noexcept nogil
+    cdef void volume_won_left_and_right(self, float64_t* volume_won_left,
+                                float64_t* volume_won_right) noexcept nogil
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""
@@ -117,6 +136,12 @@ cdef class RegressionCriterion(Criterion):
 cdef class ValueCriterion(Criterion):
     """Abstract Negative Expected Value criterion."""
 
+    cdef const float64_t[:, ::1] deal_value
+    cdef const float64_t[:] deal_volume
+    cdef const float64_t[:, ::1] expected_value
+    cdef const float64_t[:] prices
+    cdef intp_t n_prices
+
     cdef float64_t sq_sum_total
 
     cdef float64_t[::1] sum_total         # The sum of w*y.
@@ -128,7 +153,7 @@ cdef class ValueCriterion(Criterion):
     cdef intp_t right_price_index     # The price index for the root node.
 
     # Methods
-    cdef int init(
+    cdef int value_init(
         self,
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
@@ -139,6 +164,5 @@ cdef class ValueCriterion(Criterion):
         float64_t weighted_n_samples,
         const intp_t[:] sample_indices,
         intp_t start,
-        intp_t end,
-
+        intp_t end
     ) except -1 nogil

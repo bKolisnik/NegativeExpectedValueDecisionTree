@@ -254,6 +254,31 @@ cdef class Criterion:
     cdef void init_sum_missing(self):
         """Init sum_missing to hold sums for missing values."""
 
+    cdef bint check_volume_won(
+        self,
+        float64_t parent_volume_won
+    ) noexcept nogil:
+        pass
+    
+    cdef void volume_won_left_and_right(self, float64_t* volume_won_left,
+        float64_t* volume_won_right) noexcept nogil:
+        pass
+
+    cdef int value_init(
+        self,
+        const float64_t[:, ::1] y,
+        const float64_t[:] sample_weight,
+        const float64_t[:, ::1] deal_value,
+        const float64_t[:] deal_volume,
+        const float64_t[:, ::1] expected_value,
+        const float64_t[:] prices,
+        float64_t weighted_n_samples,
+        const intp_t[:] sample_indices,
+        intp_t start,
+        intp_t end
+    ) except -1 nogil:
+        pass
+
 cdef inline void _move_sums_classification(
     ClassificationCriterion criterion,
     float64_t[:, ::1] sum_1,
@@ -1707,6 +1732,7 @@ cdef class Poisson(RegressionCriterion):
                 poisson_loss += w * xlogy(y[i, k], y[i, k] / y_mean)
         return poisson_loss / (weight_sum * n_outputs)
 
+
 cdef inline void _move_sums_value(
     ValueCriterion criterion,
     float64_t[::1] sum_1,
@@ -1743,6 +1769,8 @@ cdef inline void _move_sums_value(
         memcpy(&sum_2[0], &criterion.sum_total[0], n_bytes)
         weighted_n_1[0] = 0.0
         weighted_n_2[0] = criterion.weighted_n_node_samples
+
+
 cdef class ValueCriterion(Criterion):
     r"""Abstract value criterion.
 
@@ -1788,7 +1816,7 @@ cdef class ValueCriterion(Criterion):
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
 
-    cdef int init(
+    cdef int value_init(
         self,
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
@@ -1799,7 +1827,7 @@ cdef class ValueCriterion(Criterion):
         float64_t weighted_n_samples,
         const intp_t[:] sample_indices,
         intp_t start,
-        intp_t end,
+        intp_t end
     ) except -1 nogil:
         """Initialize the criterion.
 
@@ -1835,6 +1863,7 @@ cdef class ValueCriterion(Criterion):
 
         #count them first
         for p in range(start, end):
+            i = sample_indices[p]
             self.weighted_n_node_samples += self.deal_volume[i]
         
         
@@ -1976,7 +2005,7 @@ cdef class ValueCriterion(Criterion):
         
         for ind in range(self.n_prices):
             if self.sum_left[ind] < left_best_ev:
-                left_best_ev = self.sum_left[ind]
+                left_best_ev = self.sum_left[ind] # index should be typed for more efficient access?
                 left_index = ind
             if self.sum_right[ind] < right_best_ev:
                 right_best_ev = self.sum_right[ind]
@@ -2032,8 +2061,7 @@ cdef class ValueCriterion(Criterion):
 
         return self._check_monotonicity(monotonic_cst, lower_bound, upper_bound, value_left, value_right)
 
-
-cdef class NegativeExpectedValueCriterion(Criterion):
+cdef class NegativeExpectedValueCriterion(ValueCriterion):
     """Negative expected value impurity criterion.
 
         Negative expected value = neg expected val left + neg expected val right

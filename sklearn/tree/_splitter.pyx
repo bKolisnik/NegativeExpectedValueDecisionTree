@@ -61,6 +61,7 @@ cdef class Splitter:
         float64_t min_weight_leaf,
         object random_state,
         const int8_t[:] monotonic_cst,
+        const bint with_volume_cst = 0,
     ):
         """
         Parameters
@@ -100,6 +101,7 @@ cdef class Splitter:
         self.random_state = random_state
         self.monotonic_cst = monotonic_cst
         self.with_monotonic_cst = monotonic_cst is not None
+        self.with_volume_cst = with_volume_cst
 
     def __getstate__(self):
         return {}
@@ -1618,7 +1620,7 @@ cdef class RandomSparseSplitter(Splitter):
 cdef inline int node_split_value(
     Splitter splitter,
     Partitioner partitioner,
-    ValueCriterion criterion,
+    Criterion criterion,
     SplitRecord* split,
     ParentInfo* parent_record,
     bint with_monotonic_cst,
@@ -1895,7 +1897,8 @@ cdef inline int node_split_value(
 
 cdef class ValueSplitter(Splitter):
     """Splitter for finding the best split on dense data for Value Decision Trees"""
-    cdef int init(
+
+    cdef int value_init(
         self,
         object X,
         const float64_t[:, ::1] y,
@@ -1979,7 +1982,7 @@ cdef class ValueSplitter(Splitter):
         self.start = start
         self.end = end
 
-        self.criterion.init(
+        self.criterion.value_init(
             self.y,
             self.sample_weight,
             self.deal_value,
@@ -2004,16 +2007,17 @@ cdef class ValueSplitter(Splitter):
 
 cdef class ExpectedValueSplitter(ValueSplitter):
     cdef DensePartitioner partitioner
-    cdef int init(
+    cdef int value_init(
         self,
         object X,
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
         const unsigned char[::1] missing_values_in_feature_mask,
         const float64_t[:, ::1] deal_value,
-        const float64_t[:] deal_volume
+        const float64_t[:] deal_volume,
+        const float64_t[:] prices
     ) except -1:
-        ValueSplitter.init(self, X, y, sample_weight, missing_values_in_feature_mask, deal_value, deal_volume)
+        ValueSplitter.value_init(self, X, y, sample_weight, missing_values_in_feature_mask, deal_value, deal_volume, prices)
         self.partitioner = DensePartitioner(
             X, self.samples, self.feature_values, missing_values_in_feature_mask
         )
@@ -2031,4 +2035,5 @@ cdef class ExpectedValueSplitter(ValueSplitter):
             parent_record,
             self.with_monotonic_cst,
             self.monotonic_cst,
+            self.with_volume_cst
         )

@@ -81,7 +81,7 @@ CRITERIA_REG = {
     "poisson": _criterion.Poisson,
 }
 CRITERIA_VALUE = {
-    "negative_expected_value": _criterion.NegativeExpectedValue
+    "negative_expected_value": _criterion.NegativeExpectedValueCriterion
 }
 
 VALUE_SPLITTERS = {
@@ -1428,7 +1428,7 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
         }
         return {"allow_nan": allow_nan}
 
-class ExpectedValueDecisionTreeRegressor(RegressorMixin, DecisionTreeRegressor):
+class ExpectedValueDecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
     """A decision tree regressor.
 
     Read more in the :ref:`User Guide <tree>`.
@@ -1925,6 +1925,7 @@ class ExpectedValueDecisionTreeRegressor(RegressorMixin, DecisionTreeRegressor):
                 min_weight_leaf,
                 random_state,
                 monotonic_cst,
+                1 if volume_cst else 0,
             )
 
 
@@ -1956,7 +1957,7 @@ class ExpectedValueDecisionTreeRegressor(RegressorMixin, DecisionTreeRegressor):
                 self.min_impurity_decrease,
             )
 
-        builder.build(self.tree_, X, y, deal_value, deal_volume, prices, None, missing_values_in_feature_mask, volume_cst)
+        builder.value_build(self.tree_, X, y, deal_value, deal_volume, prices, None, missing_values_in_feature_mask, volume_cst)
 
         if self.n_outputs_ == 1 and is_classifier(self):
             self.n_classes_ = self.n_classes_[0]

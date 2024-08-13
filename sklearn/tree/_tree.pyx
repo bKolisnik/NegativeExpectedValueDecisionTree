@@ -397,7 +397,7 @@ cdef class DepthFirstValueTreeBuilder(TreeBuilder):
         self.max_depth = max_depth
         self.min_impurity_decrease = min_impurity_decrease
 
-    cpdef build(
+    cpdef value_build(
         self,
         Tree tree,
         object X,
@@ -407,7 +407,7 @@ cdef class DepthFirstValueTreeBuilder(TreeBuilder):
         const float64_t[:] prices,
         const float64_t[:] sample_weight=None,
         const unsigned char[::1] missing_values_in_feature_mask=None,
-        const float64_t parent_won_volume=-INFINITY
+        float64_t parent_won_volume=-INFINITY
     ):
         """Build a decision tree from the training set (X, y)."""
 
@@ -433,9 +433,10 @@ cdef class DepthFirstValueTreeBuilder(TreeBuilder):
         cdef float64_t min_impurity_decrease = self.min_impurity_decrease
 
         # Recursive partition (without actual recursion)
-        splitter.init(X, y, sample_weight, missing_values_in_feature_mask,
+        splitter.value_init(X, y, sample_weight, missing_values_in_feature_mask,
             deal_value,
-            deal_volume
+            deal_volume,
+            prices
         )
 
         cdef intp_t start
@@ -460,8 +461,8 @@ cdef class DepthFirstValueTreeBuilder(TreeBuilder):
         cdef intp_t max_depth_seen = -1
         cdef int rc = 0
 
-        cdef stack[StackRecord] builder_stack
-        cdef StackRecord stack_record
+        cdef stack[ValueStackRecord] builder_stack
+        cdef ValueStackRecord stack_record
 
         cdef ParentInfo parent_record
         _init_parent_record(&parent_record)

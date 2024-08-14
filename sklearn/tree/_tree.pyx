@@ -431,7 +431,6 @@ cdef class DepthFirstValueTreeBuilder(TreeBuilder):
         cdef float64_t min_weight_leaf = self.min_weight_leaf
         cdef intp_t min_samples_split = self.min_samples_split
         cdef float64_t min_impurity_decrease = self.min_impurity_decrease
-
         # Recursive partition (without actual recursion)
         splitter.value_init(X, y, sample_weight, missing_values_in_feature_mask,
             deal_value,
@@ -448,7 +447,6 @@ cdef class DepthFirstValueTreeBuilder(TreeBuilder):
         cdef float64_t weighted_n_node_samples
         cdef SplitRecord split
         cdef intp_t node_id
-
         cdef float64_t middle_value
         cdef float64_t left_child_min
         cdef float64_t left_child_max
@@ -510,7 +508,7 @@ cdef class DepthFirstValueTreeBuilder(TreeBuilder):
                     first = 0
 
                 # impurity == 0 with tolerance due to rounding errors
-                is_leaf = is_leaf or parent_record.impurity <= EPSILON
+                #we cannot have a pure leaf in our case
 
                 if not is_leaf:
                     splitter.node_split(

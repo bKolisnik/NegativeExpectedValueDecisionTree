@@ -1868,9 +1868,11 @@ cdef class ValueCriterion(Criterion):
         
         
         for k in range(self.n_prices):
+            candidate_total = 0.0
             for p in range(start, end):
                 i = sample_indices[p]
                 ev_ik = self.expected_value[i, k] # the expected values P(fund)*value
+                candidate_total += ev_ik
                 self.sum_total[k] += ev_ik
             
             if candidate_total < best_total:
@@ -2024,6 +2026,37 @@ cdef class ValueCriterion(Criterion):
                                 float64_t* impurity_right) noexcept nogil:
         pass
 
+    cdef float64_t impurity_improvement(self, float64_t impurity_parent,
+                                        float64_t impurity_left,
+                                        float64_t impurity_right) noexcept nogil:
+        """Compute the improvement in impurity.
+
+        This method computes the improvement in impurity when a split occurs.
+        The weighted impurity improvement equation is the following:
+
+            (impurity - right_impurity - left_impurity)
+
+        where N is the total number of samples, N_t is the number of samples
+        at the current node, N_t_L is the number of samples in the left child,
+        and N_t_R is the number of samples in the right child,
+
+        Parameters
+        ----------
+        impurity_parent : float64_t
+            The initial impurity of the parent node before the split
+
+        impurity_left : float64_t
+            The impurity of the left child
+
+        impurity_right : float64_t
+            The impurity of the right child
+
+        Return
+        ------
+        float64_t : improvement in impurity after the split occurs
+        """
+        return (impurity_parent - impurity_right - impurity_left)
+
     cdef void node_value(self, float64_t* dest) noexcept nogil:
         """Compute the node value of sample_indices[start:end] into dest."""
 
@@ -2093,7 +2126,7 @@ cdef class NegativeExpectedValueCriterion(ValueCriterion):
             sum_{i left}P(fund|interest)*value(interest) + sum_{i right}P(fund|interest)*value(interest)
         """
 
-        return self.sum_left[self.left_price_index] + self.sum_right[self.right_price_index]
+        return -self.sum_left[self.left_price_index] + -self.sum_right[self.right_price_index]
 
     cdef void children_impurity(self, float64_t* impurity_left,
                                 float64_t* impurity_right) noexcept nogil:

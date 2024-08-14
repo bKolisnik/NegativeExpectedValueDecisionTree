@@ -1695,7 +1695,7 @@ cdef inline int node_split_value(
             (n_visited_features < max_features or
              # At least one drawn features must be non constant
              n_visited_features <= n_found_constants + n_drawn_constants)):
-
+        
         n_visited_features += 1
 
         # Loop invariant: elements of features in
@@ -1798,7 +1798,7 @@ cdef inline int node_split_value(
 
                 #Having updated criterion I can check the volume cst
                 if (
-                    with_volume_cst and criterion.check_volume_won(
+                    with_volume_cst and not criterion.check_volume_won(
                         parent_volume_won
                     )
                 ):
@@ -1908,7 +1908,6 @@ cdef class ValueSplitter(Splitter):
         const float64_t[:] deal_volume,
         const float64_t[:] prices
     ) except -1:
-        #Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask)
 
         self.rand_r_state = self.random_state.randint(0, RAND_R_MAX)
         cdef intp_t n_samples = X.shape[0]
@@ -1948,7 +1947,7 @@ cdef class ValueSplitter(Splitter):
         self.deal_value = deal_value
         self.deal_volume = deal_volume
         self.prices = prices
-        self.expected_value = np.empty(y.shape, dtype=np.float64)
+        self.expected_value = np.empty((y.shape[0], y.shape[1]), dtype=np.float64)
 
         for i in range(len(y)):
             for j in range(len(y[0])):

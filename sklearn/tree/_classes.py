@@ -85,7 +85,7 @@ CRITERIA_VALUE = {
 }
 
 VALUE_SPLITTERS = {
-    "best": _splitter.ValueSplitter # Assumed to be dense.
+    "best": _splitter.ExpectedValueSplitter # Assumed to be dense.
 }
 
 DENSE_SPLITTERS = {"best": _splitter.BestSplitter, "random": _splitter.RandomSplitter}
@@ -1769,7 +1769,6 @@ class ExpectedValueDecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
         # Determine output settings
         n_samples, self.n_features_in_ = X.shape
         is_classification = False
-
         y = np.atleast_2d(y)
 
         if y.ndim == 1:
@@ -1842,9 +1841,9 @@ class ExpectedValueDecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
                 % (len(deal_value[0]), len(y[0]))
             )
         
-        if len(prices) != n_samples:
+        if len(prices) != len(y[0]):
             raise ValueError(
-                "Number of prices=%d does not match number of samples=%d"
+                "Number of prices=%d does not match number of probabilities per sample=%d"
                 % (len(prices), n_samples)
             )
 
@@ -1912,10 +1911,9 @@ class ExpectedValueDecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
                 monotonic_cst *= -1
 
         if self.volume_cst is None:
-            volume_cst = None
+            volume_cst = -np.inf
         else:
-            volume_cst = self.volume_cst * np.sum(deal_volume)
-
+            volume_cst = self.volume_cst * np.sum(deal_volume) # convert the percentage to the real absolute volume
 
         if not isinstance(self.splitter, Splitter):
             splitter = SPLITTERS[self.splitter](
@@ -1925,7 +1923,7 @@ class ExpectedValueDecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
                 min_weight_leaf,
                 random_state,
                 monotonic_cst,
-                1 if volume_cst else 0,
+                1 if volume_cst > -np.inf else 0,
             )
 
 
@@ -1956,7 +1954,7 @@ class ExpectedValueDecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
                 max_leaf_nodes,
                 self.min_impurity_decrease,
             )
-
+            
         builder.value_build(self.tree_, X, y, deal_value, deal_volume, prices, None, missing_values_in_feature_mask, volume_cst)
 
         if self.n_outputs_ == 1 and is_classifier(self):

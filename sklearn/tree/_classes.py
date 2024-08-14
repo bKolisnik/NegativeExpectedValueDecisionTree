@@ -1945,16 +1945,11 @@ class ExpectedValueDecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
                 self.min_impurity_decrease,
             )
         else:
-            builder = BestFirstTreeBuilder(
-                splitter,
-                min_samples_split,
-                min_samples_leaf,
-                min_weight_leaf,
-                max_depth,
-                max_leaf_nodes,
-                self.min_impurity_decrease,
-            )
-            
+             raise ValueError(
+                    "BestFirstTreeBuilder is not supported yet for ExpectedValueDecisionTreeRegressor "
+                    " got max_leaf_nodes >= 0"
+                )
+
         builder.value_build(self.tree_, X, y, deal_value, deal_volume, prices, None, missing_values_in_feature_mask, volume_cst)
 
         if self.n_outputs_ == 1 and is_classifier(self):

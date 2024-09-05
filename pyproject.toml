@@ -1,5 +1,5 @@
 [project]
-name = "scikit-learn"
+name = "ExpectedValueDecisionTree"
 version = "1.5.1"
 description = "A set of python modules for machine learning and data mining"
 readme = "README.rst"
